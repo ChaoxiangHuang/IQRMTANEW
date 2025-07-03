@@ -71,15 +71,25 @@ def get_ai_response(prompt, context):
     except Exception as e:
         return f"An error occurred: {e}"
 
+# --- NEW: Function to read class from URL on first load ---
+def get_class_key_from_url():
+    param_value = st.query_params.get("info")
+    if not param_value:
+        return None
+    match = re.match(r"chapter(\d+)", param_value, re.IGNORECASE)
+    if match:
+        class_num = match.group(1)
+        class_key = f"chapter_{class_num}"
+        if class_key in ALL_CLASS_DATA:
+            return class_key
+    return None
+
 # --- Callback Function to Handle Dropdown Actions ---
 def process_action():
-    """This function is called IMMEDIATELY when the user selects an action."""
     class_key = st.session_state.class_key
     action_key = f"action_selector_{class_key}"
-    selected_action = st.session_state[action_key]
-    
-    if not selected_action:
-        return # Do nothing if the placeholder is selected
+    selected_action = st.session_state.get(action_key)
+    if not selected_action: return
 
     chat_key = f"chat_{class_key}"
     st.session_state[chat_key].append({"role": "user", "content": selected_action})
@@ -88,27 +98,15 @@ def process_action():
 
     if selected_action == "List the topics in this class":
         topics = list(class_data.keys())
-        if topics:
-            response = "Here are the topics for this class session:\n\n" + "\n".join([f"* **{topic}**" for topic in topics])
-        else:
-            response = "No topics were found for this class in the data file."
-    
+        response = "Here are the topics for this class session:\n\n" + "\n".join([f"* **{topic}**" for topic in topics]) if topics else "No topics found."
     elif selected_action == "Get a tutorial on a topic":
-        tutorial_content = []
-        for topic, data in class_data.items():
-            summary = data.get('summary', 'Not available.')
-            tutorial_content.append(f"**{topic}** - {summary}")
-        
-        if tutorial_content:
-            response = "Here is a tutorial summary for each topic in this class:\n\n" + "\n\n".join(tutorial_content)
-        else:
-            response = "No tutorial summaries were found for this class."
-
+        tutorial_content = [f"**{topic}** - {data.get('summary', 'Not available.')}" for topic, data in class_data.items()]
+        response = "Here is a tutorial summary for each topic:\n\n" + "\n\n".join(tutorial_content) if tutorial_content else "No summaries found."
     elif "quizzing" in selected_action or "mastery" in selected_action:
         st.session_state.quiz_mode = "learning" if "learning" in selected_action else "mastery"
         all_questions = [q for topic in class_data.values() for q in topic.get("quiz_questions", [])]
         if not all_questions:
-             response = "There are no quiz questions available for this class to start a quiz."
+            response = "There are no quiz questions available for this class."
         else:
             if st.session_state.quiz_mode == 'mastery':
                 all_questions.sort(key=lambda x: len(x.get("question", "")), reverse=True)
@@ -122,7 +120,7 @@ def process_action():
 
 # --- UI Rendering Functions ---
 def render_landing_page():
-    # This function is unchanged and correct.
+    # Unchanged
     st.title("Welcome to the iQRM Coursebot!")
     st.markdown("You can ask general questions about the course below, or select a class from the menu on the left to begin.")
     if "main_messages" not in st.session_state: st.session_state.main_messages = []
@@ -145,13 +143,12 @@ def render_landing_page():
         st.rerun()
 
 def render_quiz_interface(class_key):
-    # This function is unchanged and correct.
+    # Unchanged
     st.subheader(f"Quiz Mode: {st.session_state.quiz_mode.capitalize()}")
     q_index = st.session_state.current_question_index
     questions_list = st.session_state.quiz_questions_list
     if not questions_list:
-        st.warning("No quiz questions found for this class.")
-        st.session_state.quiz_mode = None; st.rerun()
+        st.warning("No quiz questions found for this class."); st.session_state.quiz_mode = None; st.rerun()
     q_data = questions_list[q_index]
     st.progress((q_index + 1) / len(questions_list), text=f"Question {q_index + 1} of {len(questions_list)}")
     if "last_answer_feedback" in st.session_state:
@@ -162,55 +159,34 @@ def render_quiz_interface(class_key):
         user_answer = st.radio(f"**{question_text}**", options=formatted_options, index=None)
         submitted = st.form_submit_button("Submit Answer")
         if st.form_submit_button("Exit Quiz", type="secondary"):
-            st.session_state.quiz_mode = None
-            st.session_state.last_answer_feedback = None
-            st.rerun()
+            st.session_state.quiz_mode = None; st.session_state.last_answer_feedback = None; st.rerun()
     if submitted:
         user_choice = user_answer.split(':')[0] if user_answer else None
         correct_choice = q_data.get("correct")
         if user_choice == correct_choice:
-            st.session_state.score += 1
-            st.session_state.last_answer_feedback = "Correct! 🎉 Here is the next question."
+            st.session_state.score += 1; st.session_state.last_answer_feedback = "Correct! 🎉 Here is the next question."
         else:
             st.session_state.last_answer_feedback = f"Not quite. The correct answer was **{correct_choice}**. Here is the next question."
         if q_index + 1 < len(questions_list):
             st.session_state.current_question_index += 1
         else:
-            feedback = f"Quiz complete! Your final score is {st.session_state.score}/{len(questions_list)}."
-            st.success(feedback)
-            st.session_state.quiz_mode = None
-            st.session_state.last_answer_feedback = None
+            st.success(f"Quiz complete! Your final score is {st.session_state.score}/{len(questions_list)}.")
+            st.session_state.quiz_mode = None; st.session_state.last_answer_feedback = None
         st.rerun()
 
 def render_class_page(class_key):
+    # Unchanged
     class_num = class_key.split('_')[1]
     st.title(f"Welcome to iQRM Classbot {int(class_num):02d}")
-
-    # If in quiz mode, render the quiz UI and stop.
     if st.session_state.get("quiz_mode"):
-        render_quiz_interface(class_key)
-        return
-
+        render_quiz_interface(class_key); return
     chat_key = f"chat_{class_key}"
     action_key = f"action_selector_{class_key}"
     if chat_key not in st.session_state: st.session_state[chat_key] = []
-    
-    # Display chat history first
     for message in st.session_state[chat_key]:
         with st.chat_message(message["role"]): st.markdown(message["content"])
-
-    # Define the selectbox with the on_change callback
     actions = ["List the topics in this class", "Learn through quizzing", "Test for mastery", "Get a tutorial on a topic"]
-    st.selectbox(
-        "Select an action:", 
-        options=actions, 
-        index=None, 
-        placeholder="Choose an action...", 
-        key=action_key,
-        on_change=process_action # This is the corrected logic
-    )
-
-    # The free-form LLM chat box
+    st.selectbox("Select an action:", options=actions, index=None, placeholder="Choose an action...", key=action_key, on_change=process_action)
     if prompt := st.chat_input(f"Ask Classbot {int(class_num):02d} something else..."):
         context = get_class_context_for_llm(class_key)
         llm_response = get_ai_response(prompt, context)
@@ -218,16 +194,28 @@ def render_class_page(class_key):
         st.session_state[chat_key].append({"role": "assistant", "content": llm_response})
         st.rerun()
 
-# --- Main Application Router ---
+# --- Main Application Logic & Router ---
 ALL_CLASS_DATA = load_class_data(CLASS_DATA_FILE)
 
-if 'class_key' not in st.session_state: st.session_state.class_key = None
-if 'quiz_mode' not in st.session_state: st.session_state.quiz_mode = None
+# --- MODIFIED: Initialization logic now checks the URL ---
+# This block runs only ONCE per session.
+if 'session_initialized' not in st.session_state:
+    st.session_state.session_initialized = True
+    st.session_state.class_key = None
+    st.session_state.quiz_mode = None
+    
+    # Check the URL for a class key on this first run
+    class_key_from_url = get_class_key_from_url()
+    if class_key_from_url:
+        st.session_state.class_key = class_key_from_url
+        st.rerun() # Rerun immediately to load the class page
 
+# --- Sidebar Navigation ---
 st.sidebar.title("Classes")
 if st.sidebar.button("Home (Coursebot)", use_container_width=True):
     st.session_state.class_key = None
     st.session_state.quiz_mode = None
+    if 'info' in st.query_params: st.query_params.clear()
     st.rerun()
 st.sidebar.markdown("---")
 
@@ -237,6 +225,8 @@ try:
 except (ValueError, TypeError):
     current_class_index = None
 
+# This selectbox now reads its default value from the session state,
+# which may have been set by the URL on the first run.
 selected_class = st.sidebar.selectbox(
     "Select a Class Session",
     options=class_keys,
@@ -246,9 +236,11 @@ selected_class = st.sidebar.selectbox(
 )
 if selected_class != st.session_state.class_key:
     st.session_state.class_key = selected_class
-    st.session_state.quiz_mode = None
+    st.session_state.quiz_mode = None # Reset quiz mode on class change
+    if 'info' in st.query_params: st.query_params.clear() # Clear param when navigating manually
     st.rerun()
 
+# --- Page Router ---
 if st.session_state.class_key:
     render_class_page(st.session_state.class_key)
 else:
